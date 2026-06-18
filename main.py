@@ -9,12 +9,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from batch import create_batch, get_batch
+from batch import build_transcripts_zip, create_batch, get_batch
 from processing import AudioExtractionError, extract_audio, safe_unlink, sweep_temp_audio
 from streaming import hub
 from transcription import TranscriptionError, maybe_unload_model, transcribe_audio
@@ -37,6 +37,10 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 class BatchUploadRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
     directory: str | None = None
+
+
+class BatchDownloadRequest(BaseModel):
+    files: list[str] = Field(default_factory=list)
 
 
 async def run_blocking(func, *args, **kwargs):
@@ -343,3 +347,19 @@ async def download_transcript(name: str):
     if not path.is_file():
         return JSONResponse(status_code=404, content={"detail": "Transcript not found"})
     return FileResponse(path, media_type="text/plain", filename=path.name)
+
+
+@app.post("/api/download-batch")
+async def download_batch(body: BatchDownloadRequest):
+    if not body.files:
+        return JSONResponse(status_code=400, content={"detail": "No transcript files provided"})
+
+    payload = await run_blocking(build_transcripts_zip, body.files, OUTPUTS_DIR)
+    if not payload:
+        return JSONResponse(status_code=404, content={"detail": "No transcripts found on disk"})
+
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="offscript_transcripts.zip"'},
+    )

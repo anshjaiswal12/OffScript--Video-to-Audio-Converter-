@@ -1,4 +1,6 @@
 import uuid
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -37,3 +39,17 @@ def create_batch(
 
 def get_batch(batch_id: str) -> dict[str, Any] | None:
     return _batches.get(batch_id)
+
+
+def build_transcripts_zip(filenames: list[str], outputs_dir: Path) -> bytes | None:
+    buffer = BytesIO()
+    added = 0
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for raw in filenames:
+            path = outputs_dir / Path(raw).name
+            if path.is_file():
+                archive.write(path, arcname=path.name)
+                added += 1
+    if not added:
+        return None
+    return buffer.getvalue()

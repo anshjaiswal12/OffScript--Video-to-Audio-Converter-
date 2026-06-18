@@ -54,9 +54,15 @@
       </section>
 
       <section class="lg:col-span-3 rounded-2xl border border-white/5 bg-surface-900/60 flex flex-col min-h-[420px]">
-        <div class="px-5 py-4 border-b border-white/5 flex items-center justify-between">
-          <h2 class="text-sm font-medium text-slate-200">Batch queue</h2>
-          <span id="queue-count" class="text-xs text-slate-500">0 files</span>
+        <div class="px-5 py-4 border-b border-white/5 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <h2 class="text-sm font-medium text-slate-200">Batch queue</h2>
+            <span id="queue-count" class="text-xs text-slate-500">0 files</span>
+          </div>
+          <button id="download-all-btn" type="button" hidden
+            class="hidden text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium transition-colors">
+            Download all (.zip)
+          </button>
         </div>
         <ul id="queue-list" class="flex-1 overflow-y-auto divide-y divide-white/5">
           <li id="queue-empty" class="p-8 text-center text-sm text-slate-500">No videos queued yet.</li>
@@ -227,6 +233,47 @@
       });
     }
 
+    function getCompletedTranscripts() {
+      return [...queue.values()]
+        .filter((item) => item.status === "Completed" && item.downloadUrl)
+        .map((item) => item.downloadUrl.split("/").pop());
+    }
+
+    function refreshDownloadAll() {
+      const files = getCompletedTranscripts();
+      const btn = $("download-all-btn");
+      if (!files.length) {
+        btn.hidden = true;
+        btn.classList.add("hidden");
+        return;
+      }
+      btn.hidden = false;
+      btn.classList.remove("hidden");
+      btn.textContent = `Download all (${files.length})`;
+    }
+
+    async function downloadAllZip() {
+      const files = getCompletedTranscripts();
+      if (!files.length) return;
+      const res = await fetch("/api/download-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showError(data.detail || "Failed to build zip");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "offscript_transcripts.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
     function addItems(entries) {
       entries.forEach(({ name, path, file, backendName }) => {
         const id = slug(name);
@@ -243,6 +290,8 @@
       if (busy || !queue.size) return;
       busy = true;
       clearError();
+      $("download-all-btn").hidden = true;
+      $("download-all-btn").classList.add("hidden");
       const items = [...queue.values()];
       const total = items.length;
       $("batch-meta").textContent = `Processing 0 / ${total}`;
@@ -281,7 +330,9 @@
       }
 
       if (es) { es.close(); es = null; }
-      $("batch-meta").textContent = `Finished · ${total} file${total === 1 ? "" : "s"}`;
+      const done = getCompletedTranscripts().length;
+      $("batch-meta").textContent = `Finished · ${done}/${total} transcribed`;
+      refreshDownloadAll();
       busy = false;
     }
 
@@ -299,6 +350,8 @@
       })));
       processQueue();
     }
+
+    $("download-all-btn").onclick = () => downloadAllZip().catch((e) => showError(e.message));
 
     $("dropzone").onclick = (e) => {
       if (e.target.closest("#folder-btn")) return;

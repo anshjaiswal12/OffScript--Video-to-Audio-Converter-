@@ -218,6 +218,9 @@ async def extract_step(
 async def transcribe_step(
     job_id: str = Form(...),
     stream_id: str | None = Form(None),
+    keep_stream: bool = Form(False),
+    file_index: int = Form(0),
+    file_count: int = Form(1),
 ):
     job = _take_job(job_id)
     if not job:
@@ -243,10 +246,23 @@ async def transcribe_step(
             str(txt_path),
             filename,
             on_event if stream_id else None,
+            file_index,
+            file_count,
         )
     except TranscriptionError as exc:
         if stream_id:
-            hub.close(stream_id, {"file_name": filename, "percent": 0, "live_text": "", "error": str(exc)})
+            hub.emit(
+                stream_id,
+                {
+                    "file_name": filename,
+                    "percent": 0,
+                    "live_text": "",
+                    "status": "error",
+                    "error": str(exc),
+                },
+            )
+            if not keep_stream:
+                hub.close(stream_id)
         return JSONResponse(
             status_code=422,
             content={"status": "error", "detail": str(exc)},
@@ -254,24 +270,27 @@ async def transcribe_step(
     finally:
         safe_unlink(audio_path)
 
+    name = Path(transcript_path).name
+    download_url = f"/api/transcript/{name}"
     if stream_id:
-        hub.close(
+        hub.emit(
             stream_id,
             {
                 "file_name": filename,
                 "percent": 100,
                 "live_text": "",
                 "status": "complete",
-                "transcript_path": transcript_path,
+                "download_url": download_url,
             },
         )
+        if not keep_stream:
+            hub.close(stream_id)
 
-    name = Path(transcript_path).name
     return {
         "status": "complete",
         "filename": filename,
         "transcript_path": transcript_path,
-        "download_url": f"/api/transcript/{name}",
+        "download_url": download_url,
     }
 
 

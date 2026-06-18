@@ -3,340 +3,335 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Offline Video Transcriber</title>
+  <title>OffScript</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
       theme: {
         extend: {
           colors: {
-            surface: { 900: "#0b0f17", 800: "#111827", 700: "#1a2233" },
-            accent: { DEFAULT: "#6366f1", glow: "#818cf8" },
-          },
-          boxShadow: {
-            glow: "0 0 40px rgba(99, 102, 241, 0.15)",
+            surface: { 950: "#07090f", 900: "#0b0f17", 800: "#111827", 700: "#1a2233" },
           },
         },
       },
     };
   </script>
   <style>
-    .drop-active {
-      border-color: #818cf8 !important;
-      background: rgba(99, 102, 241, 0.08) !important;
-      box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.35), 0 0 40px rgba(99, 102, 241, 0.2);
-    }
-    .progress-indeterminate::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      width: 40%;
-      background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.9), transparent);
-      animation: slide 1.4s ease-in-out infinite;
-    }
-    @keyframes slide {
-      0% { transform: translateX(-120%); }
-      100% { transform: translateX(320%); }
-    }
+    .drop-active { border-color: #818cf8 !important; background: rgba(99,102,241,.08) !important; }
+    .bar-fill { transition: width .25s ease; }
   </style>
 </head>
-<body class="h-full bg-surface-900 text-slate-100 antialiased">
+<body class="h-full bg-surface-950 text-slate-100 antialiased">
   <div class="min-h-full flex flex-col">
-    <header class="border-b border-white/5 bg-surface-800/80 backdrop-blur">
-      <div class="max-w-3xl mx-auto px-6 py-5 flex items-center justify-between">
+    <header class="border-b border-white/5 bg-surface-900/90 backdrop-blur px-6 py-4">
+      <div class="max-w-6xl mx-auto flex items-center justify-between">
         <div>
-          <p class="text-xs uppercase tracking-[0.2em] text-indigo-300/80">100% offline</p>
-          <h1 class="text-xl font-semibold tracking-tight">Video → Transcript</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">Off<span class="text-indigo-400">Script</span></h1>
+          <p class="text-xs text-slate-500 mt-0.5">Offline video transcription · zero API keys</p>
         </div>
-        <span class="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-          No API keys
-        </span>
+        <span id="batch-meta" class="text-xs text-slate-400 hidden"></span>
       </div>
     </header>
 
-    <main class="flex-1 flex items-center justify-center px-6 py-10">
-      <div class="w-full max-w-3xl space-y-6">
-        <section
-          id="dropzone"
-          class="relative rounded-2xl border-2 border-dashed border-slate-600/80 bg-surface-800/60 p-12 text-center transition-all duration-200 shadow-glow cursor-pointer"
-        >
-          <input id="file-input" type="file" accept="video/*,audio/*,*/*" class="hidden" />
-          <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-400/30">
-            <svg class="h-8 w-8 text-accent-glow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
-            </svg>
+    <main class="flex-1 max-w-6xl mx-auto w-full p-6 grid lg:grid-cols-5 gap-6">
+      <section class="lg:col-span-2 space-y-4">
+        <div id="dropzone" class="rounded-2xl border-2 border-dashed border-slate-700 bg-surface-800/50 p-8 text-center cursor-pointer transition-colors">
+          <input id="file-input" type="file" accept="video/*,audio/*,*/*" multiple webkitdirectory class="hidden" />
+          <p class="text-lg font-medium mb-1">Drop videos or a folder</p>
+          <p class="text-sm text-slate-400 mb-4">Multi-select · folder pick · any format</p>
+          <button type="button" id="browse-btn" class="text-sm px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500">Browse files</button>
+          <button type="button" id="folder-btn" class="text-sm px-4 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 ml-2">Browse folder</button>
+        </div>
+        <div class="rounded-xl border border-white/5 bg-surface-800/40 p-4 space-y-3">
+          <label class="text-xs uppercase tracking-wider text-slate-500">Local folder path</label>
+          <div class="flex gap-2">
+            <input id="dir-path" type="text" placeholder="/home/you/Videos" class="flex-1 rounded-lg bg-surface-900 border border-white/10 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40" />
+            <button id="dir-btn" type="button" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm">Queue folder</button>
           </div>
-          <h2 class="text-2xl font-semibold mb-2">Drop Your Video File Here</h2>
-          <p class="text-slate-400 mb-4">or click to browse — any video format supported</p>
-          <p id="selected-file" class="text-sm text-indigo-300/90 hidden"></p>
-        </section>
+          <p class="text-xs text-slate-500">Skips browser upload — best for large batches on this machine.</p>
+        </div>
+        <p id="error-msg" class="hidden text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"></p>
+      </section>
 
-        <details class="rounded-xl border border-white/5 bg-surface-800/40 px-5 py-4">
-          <summary class="cursor-pointer text-sm text-slate-300 select-none">
-            Use local file path instead (skips browser upload — best for large files)
-          </summary>
-          <div class="mt-4 flex flex-col sm:flex-row gap-3">
-            <input
-              id="local-path"
-              type="text"
-              placeholder="/home/you/Videos/my clip.mp4"
-              class="flex-1 rounded-lg bg-surface-900 border border-white/10 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-            />
-            <button
-              id="path-btn"
-              type="button"
-              class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 text-sm font-medium transition-colors"
-            >
-              Transcribe from path
-            </button>
-          </div>
-        </details>
-
-        <section id="progress-panel" class="hidden rounded-2xl border border-white/5 bg-surface-800/70 p-6 space-y-4">
-          <div class="flex items-center justify-between gap-4">
-            <p id="status-label" class="text-sm font-medium text-slate-200">Preparing…</p>
-            <p id="upload-percent" class="text-xs text-slate-400 hidden"></p>
-          </div>
-          <div class="relative h-2 overflow-hidden rounded-full bg-surface-900">
-            <div id="progress-bar" class="absolute inset-y-0 left-0 w-0 rounded-full bg-gradient-to-r from-indigo-500 to-violet-400 transition-all duration-300"></div>
-            <div id="progress-indeterminate" class="progress-indeterminate absolute inset-0 hidden"></div>
-          </div>
-          <ul class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-            <li id="step-upload" class="rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500">① Upload / path</li>
-            <li id="step-extract" class="rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500">② Extracting audio</li>
-            <li id="step-transcribe" class="rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500">③ Transcribing</li>
-          </ul>
-        </section>
-
-        <section id="result-panel" class="hidden rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <p class="text-emerald-300 font-medium mb-1">Done! Download .txt</p>
-              <p id="result-path" class="text-xs text-slate-400 break-all"></p>
-            </div>
-            <a
-              id="download-btn"
-              href="#"
-              download
-              class="inline-flex items-center justify-center rounded-xl bg-emerald-600 hover:bg-emerald-500 px-6 py-3 text-sm font-semibold transition-colors"
-            >
-              Download transcript
-            </a>
-          </div>
-        </section>
-
-        <p id="error-msg" class="hidden text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3"></p>
-      </div>
+      <section class="lg:col-span-3 rounded-2xl border border-white/5 bg-surface-900/60 flex flex-col min-h-[420px]">
+        <div class="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+          <h2 class="text-sm font-medium text-slate-200">Batch queue</h2>
+          <span id="queue-count" class="text-xs text-slate-500">0 files</span>
+        </div>
+        <ul id="queue-list" class="flex-1 overflow-y-auto divide-y divide-white/5">
+          <li id="queue-empty" class="p-8 text-center text-sm text-slate-500">No videos queued yet.</li>
+        </ul>
+      </section>
     </main>
   </div>
 
   <script>
-    const dropzone = document.getElementById("dropzone");
-    const fileInput = document.getElementById("file-input");
-    const localPathInput = document.getElementById("local-path");
-    const pathBtn = document.getElementById("path-btn");
-    const progressPanel = document.getElementById("progress-panel");
-    const resultPanel = document.getElementById("result-panel");
-    const errorMsg = document.getElementById("error-msg");
-    const statusLabel = document.getElementById("status-label");
-    const uploadPercent = document.getElementById("upload-percent");
-    const progressBar = document.getElementById("progress-bar");
-    const progressIndeterminate = document.getElementById("progress-indeterminate");
-    const selectedFile = document.getElementById("selected-file");
-    const downloadBtn = document.getElementById("download-btn");
-    const resultPath = document.getElementById("result-path");
-    const steps = {
-      upload: document.getElementById("step-upload"),
-      extract: document.getElementById("step-extract"),
-      transcribe: document.getElementById("step-transcribe"),
+    const $ = (id) => document.getElementById(id);
+    const queue = new Map();
+    let busy = false;
+    let es = null;
+
+    const statusClass = {
+      Queued: "bg-slate-700/50 text-slate-300",
+      Processing: "bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-400/30",
+      Completed: "bg-emerald-500/10 text-emerald-300",
+      Error: "bg-red-500/10 text-red-300",
     };
 
-    let busy = false;
-
-    function resetUI() {
-      errorMsg.classList.add("hidden");
-      resultPanel.classList.add("hidden");
-      progressPanel.classList.add("hidden");
-      progressBar.style.width = "0%";
-      progressIndeterminate.classList.add("hidden");
-      uploadPercent.classList.add("hidden");
-      Object.values(steps).forEach((el) => {
-        el.className = "rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500";
-      });
+    function slug(name) {
+      return name.replace(/[^\w.-]+/g, "_");
     }
 
-    function setStep(active) {
-      const order = ["upload", "extract", "transcribe"];
-      order.forEach((name) => {
-        const el = steps[name];
-        if (name === active) {
-          el.className = "rounded-lg px-3 py-2 bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-400/30";
-        } else if (order.indexOf(name) < order.indexOf(active)) {
-          el.className = "rounded-lg px-3 py-2 bg-emerald-500/10 text-emerald-300";
-        } else {
-          el.className = "rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500";
-        }
-      });
+    function basename(p) {
+      return p.split(/[/\\]/).pop();
     }
 
-    function showError(message) {
-      errorMsg.textContent = message;
-      errorMsg.classList.remove("hidden");
-      progressPanel.classList.add("hidden");
-      busy = false;
+    function showError(msg) {
+      $("error-msg").textContent = msg;
+      $("error-msg").classList.remove("hidden");
     }
 
-    function showProgress(label, { determinate = false, percent = 0, step = "upload" } = {}) {
-      progressPanel.classList.remove("hidden");
-      statusLabel.textContent = label;
-      setStep(step);
-      if (determinate) {
-        progressIndeterminate.classList.add("hidden");
-        progressBar.style.width = `${Math.min(100, percent)}%`;
-        uploadPercent.textContent = `${Math.round(percent)}%`;
-        uploadPercent.classList.remove("hidden");
-      } else {
-        progressBar.style.width = "100%";
-        progressIndeterminate.classList.remove("hidden");
-        uploadPercent.classList.add("hidden");
+    function clearError() {
+      $("error-msg").classList.add("hidden");
+    }
+
+    function renderQueue() {
+      const list = $("queue-list");
+      const empty = $("queue-empty");
+      $("queue-count").textContent = `${queue.size} file${queue.size === 1 ? "" : "s"}`;
+      if (!queue.size) {
+        empty.classList.remove("hidden");
+        return;
       }
+      empty.classList.add("hidden");
+      list.querySelectorAll("[data-row]").forEach((n) => n.remove());
+      queue.forEach((item) => list.appendChild(buildRow(item)));
     }
 
-    function showResult(data) {
-      progressPanel.classList.add("hidden");
-      resultPanel.classList.remove("hidden");
-      downloadBtn.href = data.download_url;
-      resultPath.textContent = data.transcript_path || data.download_url;
-      busy = false;
+    function buildRow(item) {
+      const li = document.createElement("li");
+      li.dataset.row = item.id;
+      li.className = "px-5 py-4 space-y-2";
+      li.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium truncate" title="${item.name}">${item.name}</p>
+            <p class="text-xs text-slate-500 truncate mt-0.5 live-text">${item.liveText || "—"}</p>
+          </div>
+          <span class="status-tag shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded-full ${statusClass[item.status]}">${item.status}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="flex-1 h-1.5 rounded-full bg-surface-800 overflow-hidden">
+            <div class="bar-fill h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-400" style="width:${item.percent}%"></div>
+          </div>
+          <span class="pct text-xs text-slate-400 w-10 text-right">${item.percent}%</span>
+          <a class="dl-btn shrink-0 p-2 rounded-lg border border-white/10 text-slate-500 pointer-events-none opacity-40" href="#" download title="Download .txt">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M7.5 7.5l4.5-4.5M12 3v13.5"/></svg>
+          </a>
+        </div>`;
+      const btn = li.querySelector(".dl-btn");
+      if (item.downloadUrl) enableDownload(btn, item.downloadUrl);
+      return li;
+    }
+
+    function enableDownload(btn, url) {
+      btn.href = url;
+      btn.classList.remove("pointer-events-none", "opacity-40", "text-slate-500");
+      btn.classList.add("text-emerald-300", "hover:bg-emerald-500/10", "border-emerald-500/30");
+    }
+
+    function findRowEl(name) {
+      const id = slug(name);
+      return document.querySelector(`[data-row="${id}"]`) || null;
+    }
+
+    function matchItem(fileName) {
+      for (const item of queue.values()) {
+        if (item.backendName === fileName || item.name === fileName || basename(item.name) === fileName) return item;
+      }
+      return null;
+    }
+
+    function updateRowUI(name, patch) {
+      const item = matchItem(name);
+      if (!item) return;
+      Object.assign(item, patch);
+      const row = findRowEl(item.id);
+      if (!row) return;
+      if (patch.status) {
+        const tag = row.querySelector(".status-tag");
+        tag.textContent = item.status;
+        tag.className = `status-tag shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded-full ${statusClass[item.status]}`;
+      }
+      if (patch.percent != null) {
+        row.querySelector(".bar-fill").style.width = `${item.percent}%`;
+        row.querySelector(".pct").textContent = `${item.percent}%`;
+      }
+      if (patch.liveText != null) row.querySelector(".live-text").textContent = patch.liveText || "—";
+      if (patch.downloadUrl) enableDownload(row.querySelector(".dl-btn"), patch.downloadUrl);
+    }
+
+    function handleSSE(data) {
+      if (!data.file_name) return;
+      const patch = { liveText: data.live_text };
+      if (data.percent != null) patch.percent = data.percent;
+      if (data.status === "complete") {
+        patch.status = "Completed";
+        patch.percent = 100;
+        if (data.download_url) patch.downloadUrl = data.download_url;
+      }
+      if (data.status === "error") patch.status = "Error";
+      updateRowUI(data.file_name, patch);
+    }
+
+    function connectSSE(streamId) {
+      if (es) es.close();
+      es = new EventSource(`/api/stream-progress?stream_id=${streamId}`);
+      es.addEventListener("progress", (e) => {
+        try { handleSSE(JSON.parse(e.data)); } catch {}
+      });
     }
 
     async function postForm(url, formData) {
-      const response = await fetch(url, { method: "POST", body: formData });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const detail = data.detail;
-        const message = typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail[0]?.msg
-            : data.message;
-        throw new Error(message || "Request failed");
-      }
+      const res = await fetch(url, { method: "POST", body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.message || "Request failed");
       return data;
     }
 
-    function uploadWithProgress(file) {
+    async function postJSON(url, body) {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.message || "Request failed");
+      return data;
+    }
+
+    function uploadExtract(file, onProgress) {
       return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        const formData = new FormData();
-        formData.append("file", file, file.name);
-
-        xhr.upload.addEventListener("progress", (event) => {
-          if (event.lengthComputable) {
-            const pct = (event.loaded / event.total) * 100;
-            if (pct >= 100) {
-              showProgress("Extracting Audio…", { step: "extract" });
-            } else {
-              showProgress(`Uploading ${file.name}…`, { determinate: true, percent: pct * 0.9, step: "upload" });
-            }
-          } else {
-            showProgress(`Uploading ${file.name}…`, { step: "upload" });
-          }
-        });
-
-        xhr.addEventListener("load", () => {
-          let data;
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable && onProgress) onProgress(Math.round((ev.loaded / ev.total) * 40));
+        };
+        xhr.onload = () => {
           try {
-            data = JSON.parse(xhr.responseText);
-          } catch {
-            reject(new Error("Invalid server response"));
-            return;
-          }
-          if (xhr.status >= 400) {
-            const detail = data.detail;
-            const message = typeof detail === "string"
-              ? detail
-              : Array.isArray(detail)
-                ? detail[0]?.msg
-                : null;
-            reject(new Error(message || "Upload failed"));
-            return;
-          }
-          resolve(data);
-        });
-
-        xhr.addEventListener("error", () => reject(new Error("Network error during upload")));
-        xhr.addEventListener("abort", () => reject(new Error("Upload cancelled")));
-
+            const data = JSON.parse(xhr.responseText);
+            if (xhr.status >= 400) throw new Error(data.detail || "Upload failed");
+            resolve(data);
+          } catch (e) { reject(e); }
+        };
+        xhr.onerror = () => reject(new Error("Upload failed"));
         xhr.open("POST", "/api/extract");
-        xhr.send(formData);
+        xhr.send(fd);
       });
     }
 
-    async function runPipeline({ file, path }) {
-      if (busy) return;
+    function addItems(entries) {
+      entries.forEach(({ name, path, file, backendName }) => {
+        const id = slug(name);
+        if (queue.has(id)) return;
+        queue.set(id, {
+          id, name, backendName: backendName || basename(name), path: path || null,
+          file: file || null, status: "Queued", percent: 0, liveText: "", downloadUrl: null,
+        });
+      });
+      renderQueue();
+    }
+
+    async function processQueue() {
+      if (busy || !queue.size) return;
       busy = true;
-      resetUI();
+      clearError();
+      const items = [...queue.values()];
+      const total = items.length;
+      $("batch-meta").textContent = `Processing 0 / ${total}`;
+      $("batch-meta").classList.remove("hidden");
 
-      try {
-        let extractResult;
+      const { stream_id } = await fetch("/api/stream/open", { method: "POST" }).then((r) => r.json());
+      connectSSE(stream_id);
 
-        if (path) {
-          showProgress("Extracting Audio…", { step: "extract" });
-          const formData = new FormData();
-          formData.append("path", path);
-          extractResult = await postForm("/api/extract", formData);
-        } else if (file) {
-          selectedFile.textContent = file.name;
-          selectedFile.classList.remove("hidden");
-          showProgress("Starting upload…", { step: "upload", percent: 0, determinate: true });
-          extractResult = await uploadWithProgress(file);
-        } else {
-          throw new Error("No file selected");
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        updateRowUI(item.backendName || item.name, { status: "Processing", percent: 0, liveText: "Extracting audio…" });
+        $("batch-meta").textContent = `Processing ${i + 1} / ${total}`;
+
+        try {
+          let extracted;
+          if (item.path) {
+            const fd = new FormData();
+            fd.append("path", item.path);
+            extracted = await postForm("/api/extract", fd);
+          } else {
+            extracted = await uploadExtract(item.file, (pct) => updateRowUI(item.backendName || item.name, { percent: pct }));
+          }
+
+          updateRowUI(item.backendName || item.name, { liveText: "Transcribing…" });
+          const fd = new FormData();
+          fd.append("job_id", extracted.job_id);
+          fd.append("stream_id", stream_id);
+          fd.append("keep_stream", i < total - 1 ? "true" : "false");
+          fd.append("file_index", String(i));
+          fd.append("file_count", String(total));
+          const result = await postForm("/api/transcribe-step", fd);
+          updateRowUI(item.backendName || item.name, { status: "Completed", percent: 100, downloadUrl: result.download_url, liveText: "Done" });
+        } catch (err) {
+          updateRowUI(item.backendName || item.name, { status: "Error", liveText: err.message || "Failed" });
         }
-
-        showProgress("Transcribing (this may take a few minutes)…", { step: "transcribe" });
-        const formData = new FormData();
-        formData.append("job_id", extractResult.job_id);
-        const result = await postForm("/api/transcribe-step", formData);
-
-        showResult(result);
-      } catch (err) {
-        showError(err.message || "Something went wrong");
       }
+
+      if (es) { es.close(); es = null; }
+      $("batch-meta").textContent = `Finished · ${total} file${total === 1 ? "" : "s"}`;
+      busy = false;
     }
 
-    dropzone.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", () => {
-      if (fileInput.files[0]) runPipeline({ file: fileInput.files[0] });
-    });
+    async function queueDirectory(dir) {
+      const data = await postJSON("/api/upload-batch", { directory: dir, paths: [] });
+      addItems(data.queue.map((p) => ({ name: basename(p), path: p })));
+      await processQueue();
+    }
 
-    ["dragenter", "dragover"].forEach((eventName) => {
-      dropzone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        dropzone.classList.add("drop-active");
-      });
-    });
+    function queueFiles(fileList) {
+      addItems([...fileList].map((f) => ({
+        name: f.webkitRelativePath || f.name,
+        backendName: f.name,
+        file: f,
+      })));
+      processQueue();
+    }
 
-    ["dragleave", "drop"].forEach((eventName) => {
-      dropzone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        dropzone.classList.remove("drop-active");
-      });
-    });
+    $("dropzone").onclick = (e) => {
+      if (e.target.closest("#folder-btn")) return;
+      $("file-input").removeAttribute("webkitdirectory");
+      $("file-input").click();
+    };
+    $("browse-btn").onclick = (e) => {
+      e.stopPropagation();
+      $("file-input").removeAttribute("webkitdirectory");
+      $("file-input").multiple = true;
+      $("file-input").click();
+    };
+    $("folder-btn").onclick = (e) => {
+      e.stopPropagation();
+      $("file-input").setAttribute("webkitdirectory", "");
+      $("file-input").click();
+    };
+    $("file-input").onchange = () => {
+      if ($("file-input").files?.length) queueFiles($("file-input").files);
+      $("file-input").value = "";
+    };
+    $("dir-btn").onclick = () => {
+      const dir = $("dir-path").value.trim();
+      if (!dir) return showError("Enter a folder path on this machine.");
+      clearError();
+      queueDirectory(dir).catch((e) => showError(e.message));
+    };
 
-    dropzone.addEventListener("drop", (e) => {
-      const file = e.dataTransfer.files[0];
-      if (file) runPipeline({ file });
-    });
-
-    pathBtn.addEventListener("click", () => {
-      const path = localPathInput.value.trim();
-      if (!path) {
-        showError("Enter the full path to your video file on this machine.");
-        return;
-      }
-      runPipeline({ path });
+    ["dragenter", "dragover"].forEach((ev) => $("dropzone").addEventListener(ev, (e) => { e.preventDefault(); $("dropzone").classList.add("drop-active"); }));
+    ["dragleave", "drop"].forEach((ev) => $("dropzone").addEventListener(ev, (e) => { e.preventDefault(); $("dropzone").classList.remove("drop-active"); }));
+    $("dropzone").addEventListener("drop", (e) => {
+      const files = [...e.dataTransfer.files];
+      if (files.length) queueFiles(files);
     });
   </script>
 </body>

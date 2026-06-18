@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Offline Video Transcriber</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: { 900: "#0b0f17", 800: "#111827", 700: "#1a2233" },
+            accent: { DEFAULT: "#6366f1", glow: "#818cf8" },
+          },
+          boxShadow: {
+            glow: "0 0 40px rgba(99, 102, 241, 0.15)",
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    .drop-active {
+      border-color: #818cf8 !important;
+      background: rgba(99, 102, 241, 0.08) !important;
+      box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.35), 0 0 40px rgba(99, 102, 241, 0.2);
+    }
+    .progress-indeterminate::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 40%;
+      background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.9), transparent);
+      animation: slide 1.4s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
+  </style>
+</head>
+<body class="h-full bg-surface-900 text-slate-100 antialiased">
+  <div class="min-h-full flex flex-col">
+    <header class="border-b border-white/5 bg-surface-800/80 backdrop-blur">
+      <div class="max-w-3xl mx-auto px-6 py-5 flex items-center justify-between">
+        <div>
+          <p class="text-xs uppercase tracking-[0.2em] text-indigo-300/80">100% offline</p>
+          <h1 class="text-xl font-semibold tracking-tight">Video → Transcript</h1>
+        </div>
+        <span class="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+          No API keys
+        </span>
+      </div>
+    </header>
+
+    <main class="flex-1 flex items-center justify-center px-6 py-10">
+      <div class="w-full max-w-3xl space-y-6">
+        <section
+          id="dropzone"
+          class="relative rounded-2xl border-2 border-dashed border-slate-600/80 bg-surface-800/60 p-12 text-center transition-all duration-200 shadow-glow cursor-pointer"
+        >
+          <input id="file-input" type="file" accept="video/*,audio/*,*/*" class="hidden" />
+          <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-400/30">
+            <svg class="h-8 w-8 text-accent-glow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+            </svg>
+          </div>
+          <h2 class="text-2xl font-semibold mb-2">Drop Your Video File Here</h2>
+          <p class="text-slate-400 mb-4">or click to browse — any video format supported</p>
+          <p id="selected-file" class="text-sm text-indigo-300/90 hidden"></p>
+        </section>
+
+        <details class="rounded-xl border border-white/5 bg-surface-800/40 px-5 py-4">
+          <summary class="cursor-pointer text-sm text-slate-300 select-none">
+            Use local file path instead (skips browser upload — best for large files)
+          </summary>
+          <div class="mt-4 flex flex-col sm:flex-row gap-3">
+            <input
+              id="local-path"
+              type="text"
+              placeholder="/home/you/Videos/my clip.mp4"
+              class="flex-1 rounded-lg bg-surface-900 border border-white/10 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            />
+            <button
+              id="path-btn"
+              type="button"
+              class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 text-sm font-medium transition-colors"
+            >
+              Transcribe from path
+            </button>
+          </div>
+        </details>
+
+        <section id="progress-panel" class="hidden rounded-2xl border border-white/5 bg-surface-800/70 p-6 space-y-4">
+          <div class="flex items-center justify-between gap-4">
+            <p id="status-label" class="text-sm font-medium text-slate-200">Preparing…</p>
+            <p id="upload-percent" class="text-xs text-slate-400 hidden"></p>
+          </div>
+          <div class="relative h-2 overflow-hidden rounded-full bg-surface-900">
+            <div id="progress-bar" class="absolute inset-y-0 left-0 w-0 rounded-full bg-gradient-to-r from-indigo-500 to-violet-400 transition-all duration-300"></div>
+            <div id="progress-indeterminate" class="progress-indeterminate absolute inset-0 hidden"></div>
+          </div>
+          <ul class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+            <li id="step-upload" class="rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500">① Upload / path</li>
+            <li id="step-extract" class="rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500">② Extracting audio</li>
+            <li id="step-transcribe" class="rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500">③ Transcribing</li>
+          </ul>
+        </section>
+
+        <section id="result-panel" class="hidden rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <p class="text-emerald-300 font-medium mb-1">Done! Download .txt</p>
+              <p id="result-path" class="text-xs text-slate-400 break-all"></p>
+            </div>
+            <a
+              id="download-btn"
+              href="#"
+              download
+              class="inline-flex items-center justify-center rounded-xl bg-emerald-600 hover:bg-emerald-500 px-6 py-3 text-sm font-semibold transition-colors"
+            >
+              Download transcript
+            </a>
+          </div>
+        </section>
+
+        <p id="error-msg" class="hidden text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3"></p>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("file-input");
+    const localPathInput = document.getElementById("local-path");
+    const pathBtn = document.getElementById("path-btn");
+    const progressPanel = document.getElementById("progress-panel");
+    const resultPanel = document.getElementById("result-panel");
+    const errorMsg = document.getElementById("error-msg");
+    const statusLabel = document.getElementById("status-label");
+    const uploadPercent = document.getElementById("upload-percent");
+    const progressBar = document.getElementById("progress-bar");
+    const progressIndeterminate = document.getElementById("progress-indeterminate");
+    const selectedFile = document.getElementById("selected-file");
+    const downloadBtn = document.getElementById("download-btn");
+    const resultPath = document.getElementById("result-path");
+    const steps = {
+      upload: document.getElementById("step-upload"),
+      extract: document.getElementById("step-extract"),
+      transcribe: document.getElementById("step-transcribe"),
+    };
+
+    let busy = false;
+
+    function resetUI() {
+      errorMsg.classList.add("hidden");
+      resultPanel.classList.add("hidden");
+      progressPanel.classList.add("hidden");
+      progressBar.style.width = "0%";
+      progressIndeterminate.classList.add("hidden");
+      uploadPercent.classList.add("hidden");
+      Object.values(steps).forEach((el) => {
+        el.className = "rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500";
+      });
+    }
+
+    function setStep(active) {
+      const order = ["upload", "extract", "transcribe"];
+      order.forEach((name) => {
+        const el = steps[name];
+        if (name === active) {
+          el.className = "rounded-lg px-3 py-2 bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-400/30";
+        } else if (order.indexOf(name) < order.indexOf(active)) {
+          el.className = "rounded-lg px-3 py-2 bg-emerald-500/10 text-emerald-300";
+        } else {
+          el.className = "rounded-lg px-3 py-2 bg-surface-900/80 text-slate-500";
+        }
+      });
+    }
+
+    function showError(message) {
+      errorMsg.textContent = message;
+      errorMsg.classList.remove("hidden");
+      progressPanel.classList.add("hidden");
+      busy = false;
+    }
+
+    function showProgress(label, { determinate = false, percent = 0, step = "upload" } = {}) {
+      progressPanel.classList.remove("hidden");
+      statusLabel.textContent = label;
+      setStep(step);
+      if (determinate) {
+        progressIndeterminate.classList.add("hidden");
+        progressBar.style.width = `${Math.min(100, percent)}%`;
+        uploadPercent.textContent = `${Math.round(percent)}%`;
+        uploadPercent.classList.remove("hidden");
+      } else {
+        progressBar.style.width = "100%";
+        progressIndeterminate.classList.remove("hidden");
+        uploadPercent.classList.add("hidden");
+      }
+    }
+
+    function showResult(data) {
+      progressPanel.classList.add("hidden");
+      resultPanel.classList.remove("hidden");
+      downloadBtn.href = data.download_url;
+      resultPath.textContent = data.transcript_path || data.download_url;
+      busy = false;
+    }
+
+    async function postForm(url, formData) {
+      const response = await fetch(url, { method: "POST", body: formData });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail = data.detail;
+        const message = typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail[0]?.msg
+            : data.message;
+        throw new Error(message || "Request failed");
+      }
+      return data;
+    }
+
+    function uploadWithProgress(file) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const formData = new FormData();
+        formData.append("file", file, file.name);
+
+        xhr.upload.addEventListener("progress", (event) => {
+          if (event.lengthComputable) {
+            const pct = (event.loaded / event.total) * 100;
+            if (pct >= 100) {
+              showProgress("Extracting Audio…", { step: "extract" });
+            } else {
+              showProgress(`Uploading ${file.name}…`, { determinate: true, percent: pct * 0.9, step: "upload" });
+            }
+          } else {
+            showProgress(`Uploading ${file.name}…`, { step: "upload" });
+          }
+        });
+
+        xhr.addEventListener("load", () => {
+          let data;
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch {
+            reject(new Error("Invalid server response"));
+            return;
+          }
+          if (xhr.status >= 400) {
+            const detail = data.detail;
+            const message = typeof detail === "string"
+              ? detail
+              : Array.isArray(detail)
+                ? detail[0]?.msg
+                : null;
+            reject(new Error(message || "Upload failed"));
+            return;
+          }
+          resolve(data);
+        });
+
+        xhr.addEventListener("error", () => reject(new Error("Network error during upload")));
+        xhr.addEventListener("abort", () => reject(new Error("Upload cancelled")));
+
+        xhr.open("POST", "/api/extract");
+        xhr.send(formData);
+      });
+    }
+
+    async function runPipeline({ file, path }) {
+      if (busy) return;
+      busy = true;
+      resetUI();
+
+      try {
+        let extractResult;
+
+        if (path) {
+          showProgress("Extracting Audio…", { step: "extract" });
+          const formData = new FormData();
+          formData.append("path", path);
+          extractResult = await postForm("/api/extract", formData);
+        } else if (file) {
+          selectedFile.textContent = file.name;
+          selectedFile.classList.remove("hidden");
+          showProgress("Starting upload…", { step: "upload", percent: 0, determinate: true });
+          extractResult = await uploadWithProgress(file);
+        } else {
+          throw new Error("No file selected");
+        }
+
+        showProgress("Transcribing (this may take a few minutes)…", { step: "transcribe" });
+        const formData = new FormData();
+        formData.append("job_id", extractResult.job_id);
+        const result = await postForm("/api/transcribe-step", formData);
+
+        showResult(result);
+      } catch (err) {
+        showError(err.message || "Something went wrong");
+      }
+    }
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files[0]) runPipeline({ file: fileInput.files[0] });
+    });
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropzone.classList.add("drop-active");
+      });
+    });
+
+    ["dragleave", "drop"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("drop-active");
+      });
+    });
+
+    dropzone.addEventListener("drop", (e) => {
+      const file = e.dataTransfer.files[0];
+      if (file) runPipeline({ file });
+    });
+
+    pathBtn.addEventListener("click", () => {
+      const path = localPathInput.value.trim();
+      if (!path) {
+        showError("Enter the full path to your video file on this machine.");
+        return;
+      }
+      runPipeline({ path });
+    });
+  </script>
+</body>
+</html>

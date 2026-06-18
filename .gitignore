@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+uploads/*
+!uploads/.gitkeep
+temp_audio/*
+!temp_audio/.gitkeep
+outputs/*
+!outputs/.gitkeep
+models/
+*.wav
+*.txt

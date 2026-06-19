@@ -26,6 +26,13 @@ ensure_env() {
   local py
   py="$(pick_python)"
 
+  if [[ -d ".venv" ]]; then
+    if ! grep -Fq "VIRTUAL_ENV=\"${ROOT}/.venv\"" ".venv/bin/activate" 2>/dev/null; then
+      log "Virtual environment path mismatch (moved or renamed). Re-creating..."
+      rm -rf .venv
+    fi
+  fi
+
   if [[ ! -d ".venv" ]]; then
     log "Creating virtual environment..."
     "$py" -m venv .venv
@@ -108,7 +115,7 @@ ensure_env
 stop_existing_server
 
 log "Starting server at ${URL}"
-uvicorn main:app --host "$HOST" --port "$PORT" --reload &
+python -m uvicorn main:app --host "$HOST" --port "$PORT" --reload &
 SERVER_PID=$!
 
 if wait_for_server; then

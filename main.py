@@ -225,6 +225,7 @@ async def transcribe_step(
     keep_stream: bool = Form(False),
     file_index: int = Form(0),
     file_count: int = Form(1),
+    language: str | None = Form(None),
 ):
     job = _take_job(job_id)
     if not job:
@@ -252,6 +253,7 @@ async def transcribe_step(
             on_event if stream_id else None,
             file_index,
             file_count,
+            language,
         )
     except TranscriptionError as exc:
         if stream_id:
@@ -299,7 +301,10 @@ async def transcribe_step(
 
 
 @app.post("/api/transcribe")
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(
+    file: UploadFile = File(...),
+    language: str | None = Form(None),
+):
     dest = UPLOADS_DIR / f"{uuid.uuid4().hex}_{Path(file.filename or 'upload').name}"
     audio_path: str | None = None
     transcript_path: str | None = None
@@ -317,6 +322,10 @@ async def transcribe(file: UploadFile = File(...)):
             audio_path,
             str(txt_path),
             file.filename or "upload",
+            None,
+            0,
+            1,
+            language,
         )
     except AudioExtractionError as exc:
         return JSONResponse(

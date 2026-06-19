@@ -43,6 +43,15 @@
           <button type="button" id="folder-btn" class="text-sm px-4 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 ml-2">Browse folder</button>
         </div>
         <div class="rounded-xl border border-white/5 bg-surface-800/40 p-4 space-y-3">
+          <label class="text-xs uppercase tracking-wider text-slate-500">Language Mode</label>
+          <select id="language-select" class="w-full rounded-lg bg-surface-900 border border-white/10 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 text-slate-100">
+            <option value="">Auto-Detect Language</option>
+            <option value="en">English (en)</option>
+            <option value="hi">Hindi / Hinglish (hi)</option>
+          </select>
+          <p class="text-xs text-slate-500">Select language mode. Hindi/Hinglish will programmatically romanize spoken Hindi.</p>
+        </div>
+        <div class="rounded-xl border border-white/5 bg-surface-800/40 p-4 space-y-3">
           <label class="text-xs uppercase tracking-wider text-slate-500">Local folder path</label>
           <div class="flex gap-2">
             <input id="dir-path" type="text" placeholder="/home/you/Videos" class="flex-1 rounded-lg bg-surface-900 border border-white/10 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40" />
@@ -123,6 +132,7 @@
           <div class="min-w-0 flex-1">
             <p class="text-sm font-medium truncate" title="${item.name}">${item.name}</p>
             <p class="text-xs text-slate-500 truncate mt-0.5 live-text">${item.liveText || "—"}</p>
+            <p class="text-xs text-indigo-400 truncate mt-0.5 hinglish-text hidden">${item.liveTextHinglish || ""}</p>
           </div>
           <span class="status-tag shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded-full ${statusClass[item.status]}">${item.status}</span>
         </div>
@@ -174,12 +184,26 @@
         row.querySelector(".pct").textContent = `${item.percent}%`;
       }
       if (patch.liveText != null) row.querySelector(".live-text").textContent = patch.liveText || "—";
+      if (patch.liveTextHinglish !== undefined) {
+        const hEl = row.querySelector(".hinglish-text");
+        if (hEl) {
+          hEl.textContent = patch.liveTextHinglish || "";
+          if (patch.liveTextHinglish) {
+            hEl.classList.remove("hidden");
+          } else {
+            hEl.classList.add("hidden");
+          }
+        }
+      }
       if (patch.downloadUrl) enableDownload(row.querySelector(".dl-btn"), patch.downloadUrl);
     }
 
     function handleSSE(data) {
       if (!data.file_name) return;
       const patch = { liveText: data.live_text };
+      if (data.live_text_hinglish !== undefined) {
+        patch.liveTextHinglish = data.live_text_hinglish;
+      }
       if (data.percent != null) patch.percent = data.percent;
       if (data.status === "complete") {
         patch.status = "Completed";
@@ -322,6 +346,10 @@
           fd.append("keep_stream", i < total - 1 ? "true" : "false");
           fd.append("file_index", String(i));
           fd.append("file_count", String(total));
+          const lang = $("language-select").value;
+          if (lang) {
+            fd.append("language", lang);
+          }
           const result = await postForm("/api/transcribe-step", fd);
           updateRowUI(item.backendName || item.name, { status: "Completed", percent: 100, downloadUrl: result.download_url, liveText: "Done" });
         } catch (err) {

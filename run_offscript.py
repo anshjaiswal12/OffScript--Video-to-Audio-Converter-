@@ -15,7 +15,7 @@ PORT = 8000
 URL = f"http://{HOST}:{PORT}"
 
 REQUIRED_DIRS = ("static", "temp_audio", "output_transcripts", "outputs", "uploads")
-REQUIRED_MODULES = ("fastapi", "uvicorn", "ffmpeg", "faster_whisper")
+REQUIRED_MODULES = ("fastapi", "uvicorn", "ffmpeg", "faster_whisper", "indic_transliteration")
 
 
 def fail(msg: str) -> None:

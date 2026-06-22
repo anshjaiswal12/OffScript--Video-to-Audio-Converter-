@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import logging.config
 import shutil
 import time
 import uuid
@@ -14,21 +16,60 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from batch import build_transcripts_zip, create_batch, get_batch
-from processing import AudioExtractionError, extract_audio, safe_unlink, sweep_temp_audio
+from batch import build_transcripts_zip, create_batch, get_batch, record_batch_result
+from processing import (
+    ALLOWED_EXTENSIONS,
+    AudioExtractionError,
+    extract_audio,
+    is_supported_extension,
+    safe_unlink,
+    sweep_temp_audio,
+)
 from streaming import hub
 from transcription import TranscriptionError, maybe_unload_model, transcribe_audio
+
+# ---------------------------------------------------------------------------
+# Logging setup — configure once at import time
+# ---------------------------------------------------------------------------
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "[%(asctime)s] %(levelname)-8s %(name)s — %(message)s",
+            "datefmt": "%H:%M:%S",
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+        }
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "transcription": {"level": "DEBUG"},
+        "processing": {"level": "DEBUG"},
+        "streaming": {"level": "DEBUG"},
+        "batch": {"level": "DEBUG"},
+    },
+})
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 UPLOADS_DIR = BASE_DIR / "uploads"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 
-for directory in (STATIC_DIR, UPLOADS_DIR, OUTPUTS_DIR):
-    directory.mkdir(exist_ok=True)
+for _dir in (STATIC_DIR, UPLOADS_DIR, OUTPUTS_DIR):
+    _dir.mkdir(exist_ok=True)
 
 JOB_TTL_SECONDS = 3600
 MAINTENANCE_INTERVAL_SECONDS = 120
+
+# 4 GiB upload limit — large files should use the local-path endpoint instead
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 
 _jobs: dict[str, dict[str, str | float]] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
@@ -73,6 +114,8 @@ def _cleanup_stale_jobs() -> None:
         job = _jobs.pop(job_id, None)
         if job:
             safe_unlink(str(job["audio_path"]))
+    if stale_ids:
+        logger.info("Cleaned up %d stale job(s).", len(stale_ids))
 
 
 async def maintenance_loop() -> None:
@@ -81,11 +124,13 @@ async def maintenance_loop() -> None:
         await asyncio.sleep(MAINTENANCE_INTERVAL_SECONDS)
         _cleanup_stale_jobs()
         sweep_temp_audio()
+        hub.cleanup_stale()
         await run_blocking(maybe_unload_model)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("OffScript starting up …")
     sweep_temp_audio()
     task = asyncio.create_task(maintenance_loop())
     yield
@@ -98,24 +143,47 @@ async def lifespan(app: FastAPI):
     sweep_temp_audio()
     await run_blocking(maybe_unload_model, 0)
     _executor.shutdown(wait=False, cancel_futures=True)
+    logger.info("OffScript shut down cleanly.")
 
 
 app = FastAPI(title="OffScript", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ext_error(filename: str) -> JSONResponse:
+    ext = Path(filename).suffix.lower() or "(none)"
+    return JSONResponse(
+        status_code=415,
+        content={
+            "status": "error",
+            "detail": (
+                f"Unsupported file type '{ext}'. "
+                f"Accepted extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            ),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 @app.get("/")
 async def index():
     html = STATIC_DIR / "index.html"
     if html.exists():
         return FileResponse(html)
-    return {"message": "Frontend not yet added"}
+    return {"message": "Frontend not found"}
 
 
 @app.get("/api/status")
@@ -193,11 +261,30 @@ async def extract_step(
             filename = video_path.name
             if not video_path.is_file():
                 raise AudioExtractionError(f"Video file not found: {path}")
+            if not is_supported_extension(filename):
+                return _ext_error(filename)
         elif file and file.filename:
             filename = Path(file.filename).name
+            if not is_supported_extension(filename):
+                return _ext_error(filename)
+            # Check content-length header for early size rejection
+            content_length = getattr(file, "size", None)
+            if content_length is not None and content_length > MAX_UPLOAD_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "status": "error",
+                        "detail": f"File too large ({content_length // (1024**3)} GiB). Maximum is 4 GiB.",
+                    },
+                )
             temp_video = UPLOADS_DIR / f"{uuid.uuid4().hex}_{filename}"
             with temp_video.open("wb") as buffer:
                 await run_blocking(shutil.copyfileobj, file.file, buffer)
+            # Post-write size check
+            if temp_video.stat().st_size > MAX_UPLOAD_BYTES:
+                raise AudioExtractionError(
+                    f"Uploaded file exceeds the 4 GiB limit."
+                )
             video_path = temp_video
         else:
             return JSONResponse(
@@ -207,9 +294,12 @@ async def extract_step(
 
         audio_path = await run_blocking(extract_audio, str(video_path))
         job_id = _register_job(audio_path, filename)
+        logger.info("Extracted audio for '%s' → job %s", filename, job_id)
         return {"status": "extracted", "job_id": job_id, "filename": filename}
+
     except AudioExtractionError as exc:
         safe_unlink(audio_path)
+        logger.warning("Audio extraction failed for '%s': %s", filename, exc)
         return JSONResponse(
             status_code=422,
             content={"status": "error", "detail": str(exc)},
@@ -226,6 +316,7 @@ async def transcribe_step(
     file_index: int = Form(0),
     file_count: int = Form(1),
     language: str | None = Form(None),
+    batch_id: str | None = Form(None),
 ):
     job = _take_job(job_id)
     if not job:
@@ -256,6 +347,8 @@ async def transcribe_step(
             language,
         )
     except TranscriptionError as exc:
+        if batch_id:
+            record_batch_result(batch_id, filename, success=False, error=str(exc))
         if stream_id:
             hub.emit(
                 stream_id,
@@ -269,6 +362,7 @@ async def transcribe_step(
             )
             if not keep_stream:
                 hub.close(stream_id)
+        logger.warning("Transcription error for '%s': %s", filename, exc)
         return JSONResponse(
             status_code=422,
             content={"status": "error", "detail": str(exc)},
@@ -278,6 +372,10 @@ async def transcribe_step(
 
     name = Path(transcript_path).name
     download_url = f"/api/transcript/{name}"
+
+    if batch_id:
+        record_batch_result(batch_id, filename, success=True, transcript_path=transcript_path)
+
     if stream_id:
         hub.emit(
             stream_id,
@@ -292,6 +390,7 @@ async def transcribe_step(
         if not keep_stream:
             hub.close(stream_id)
 
+    logger.info("Transcription complete: '%s' → '%s'", filename, name)
     return {
         "status": "complete",
         "filename": filename,
@@ -305,13 +404,24 @@ async def transcribe(
     file: UploadFile = File(...),
     language: str | None = Form(None),
 ):
-    dest = UPLOADS_DIR / f"{uuid.uuid4().hex}_{Path(file.filename or 'upload').name}"
+    """One-shot: upload → extract → transcribe in a single request (no SSE progress)."""
+    filename = Path(file.filename or "upload").name
+    if not is_supported_extension(filename):
+        return _ext_error(filename)
+
+    dest = UPLOADS_DIR / f"{uuid.uuid4().hex}_{filename}"
     audio_path: str | None = None
     transcript_path: str | None = None
 
     try:
         with dest.open("wb") as buffer:
             await run_blocking(shutil.copyfileobj, file.file, buffer)
+
+        if dest.stat().st_size > MAX_UPLOAD_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"status": "error", "detail": "File exceeds the 4 GiB upload limit."},
+            )
 
         audio_path = await run_blocking(extract_audio, str(dest))
 
@@ -328,11 +438,13 @@ async def transcribe(
             language,
         )
     except AudioExtractionError as exc:
+        logger.warning("Extraction failed (one-shot) for '%s': %s", filename, exc)
         return JSONResponse(
             status_code=422,
             content={"status": "error", "detail": str(exc)},
         )
     except TranscriptionError as exc:
+        logger.warning("Transcription failed (one-shot) for '%s': %s", filename, exc)
         return JSONResponse(
             status_code=422,
             content={"status": "error", "detail": str(exc)},
@@ -352,7 +464,9 @@ async def transcribe(
 
 @app.get("/api/transcript/{name}")
 async def download_transcript(name: str):
-    path = OUTPUTS_DIR / Path(name).name
+    # Sanitise: strip any path components to prevent directory traversal
+    safe_name = Path(name).name
+    path = OUTPUTS_DIR / safe_name
     if not path.is_file():
         return JSONResponse(status_code=404, content={"detail": "Transcript not found"})
     return FileResponse(path, media_type="text/plain", filename=path.name)

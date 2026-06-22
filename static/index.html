@@ -5,9 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OffScript</title>
   <link rel="icon" type="image/png" href="/static/favicon.png" />
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!--
+    Tailwind is served from a locally cached copy (static/tailwind-cdn.js).
+    Run start.sh once with internet to download it; all subsequent runs are fully offline.
+    If the file is missing a plain fallback stylesheet is used below.
+  -->
   <script>
-    tailwind.config = {
+    (function () {
+      var s = document.createElement("script");
+      s.src = "/static/tailwind-cdn.js";
+      s.onerror = function () {
+        // Tailwind not cached yet — apply minimal fallback styles so the page is usable
+        var link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = "/static/fallback.css";
+        document.head.appendChild(link);
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
+  <script>
+    // Tailwind Play CDN reads window.tailwind.config before it initialises.
+    // Define it unconditionally so it is ready whenever the CDN script loads.
+    window.tailwind = window.tailwind || {};
+    window.tailwind.config = {
       theme: {
         extend: {
           colors: {
@@ -128,24 +149,37 @@
       const li = document.createElement("li");
       li.dataset.row = item.id;
       li.className = "px-5 py-4 space-y-2";
+      // Static skeleton — no user data interpolated here (avoids HTML injection from filenames)
       li.innerHTML = `
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0 flex-1">
-            <p class="text-sm font-medium truncate" title="${item.name}">${item.name}</p>
-            <p class="text-xs text-slate-500 truncate mt-0.5 live-text">${item.liveText || "—"}</p>
-            <p class="text-xs text-indigo-400 truncate mt-0.5 hinglish-text hidden">${item.liveTextHinglish || ""}</p>
+            <p class="text-sm font-medium truncate name-p"></p>
+            <p class="text-xs text-slate-500 truncate mt-0.5 live-text"></p>
+            <p class="text-xs text-indigo-400 truncate mt-0.5 hinglish-text hidden"></p>
           </div>
-          <span class="status-tag shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded-full ${statusClass[item.status]}">${item.status}</span>
+          <span class="status-tag shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded-full"></span>
         </div>
         <div class="flex items-center gap-3">
           <div class="flex-1 h-1.5 rounded-full bg-surface-800 overflow-hidden">
-            <div class="bar-fill h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-400" style="width:${item.percent}%"></div>
+            <div class="bar-fill h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-400" style="width:0%"></div>
           </div>
-          <span class="pct text-xs text-slate-400 w-10 text-right">${item.percent}%</span>
+          <span class="pct text-xs text-slate-400 w-10 text-right">0%</span>
           <a class="dl-btn shrink-0 p-2 rounded-lg border border-white/10 text-slate-500 pointer-events-none opacity-40" href="#" download title="Download .txt">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M7.5 7.5l4.5-4.5M12 3v13.5"/></svg>
           </a>
         </div>`;
+      // Populate user-controlled fields safely via textContent / setAttribute
+      const nameEl = li.querySelector(".name-p");
+      nameEl.setAttribute("title", item.name);
+      nameEl.textContent = item.name;
+      li.querySelector(".live-text").textContent = item.liveText || "—";
+      if (item.liveTextHinglish) li.querySelector(".hinglish-text").textContent = item.liveTextHinglish;
+      const tag = li.querySelector(".status-tag");
+      tag.className = `status-tag shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded-full ${statusClass[item.status]}`;
+      tag.textContent = item.status;
+      const bar = li.querySelector(".bar-fill");
+      bar.style.width = `${item.percent}%`;
+      li.querySelector(".pct").textContent = `${item.percent}%`;
       const btn = li.querySelector(".dl-btn");
       if (item.downloadUrl) enableDownload(btn, item.downloadUrl);
       return li;

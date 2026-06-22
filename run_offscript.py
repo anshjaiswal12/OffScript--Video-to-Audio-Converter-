@@ -14,7 +14,7 @@ HOST = "127.0.0.1"
 PORT = 8000
 URL = f"http://{HOST}:{PORT}"
 
-REQUIRED_DIRS = ("static", "temp_audio", "output_transcripts", "outputs", "uploads")
+REQUIRED_DIRS = ("static", "temp_audio", "outputs", "uploads")
 REQUIRED_MODULES = ("fastapi", "uvicorn", "ffmpeg", "faster_whisper", "indic_transliteration")
 
 

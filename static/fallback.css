@@ -1,0 +1,79 @@
+/* Minimal fallback stylesheet used when tailwind-cdn.js is not yet cached locally.
+   Run start.sh with internet access once to download the full Tailwind CSS bundle. */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #07090f;
+  color: #e2e8f0;
+  min-height: 100vh;
+  font-size: 14px;
+}
+header {
+  background: #0b0f17;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  padding: 1rem 1.5rem;
+}
+header h1 { font-size: 1.25rem; font-weight: 600; }
+header p  { font-size: .75rem; color: #64748b; margin-top: 2px; }
+main {
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 1.5rem;
+}
+@media (max-width: 768px) { main { grid-template-columns: 1fr; } }
+section { display: flex; flex-direction: column; gap: .75rem; }
+#dropzone {
+  border: 2px dashed #334155;
+  border-radius: 1rem;
+  padding: 2rem;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(17,24,39,.5);
+}
+#dropzone p { margin-bottom: .5rem; }
+button {
+  padding: .4rem .9rem;
+  border-radius: .5rem;
+  border: none;
+  cursor: pointer;
+  font-size: .85rem;
+  background: #4f46e5;
+  color: #fff;
+  margin: .2rem;
+}
+button:hover { background: #6366f1; }
+select, input[type=text] {
+  width: 100%;
+  padding: .45rem .75rem;
+  border-radius: .5rem;
+  border: 1px solid rgba(255,255,255,.1);
+  background: #0b0f17;
+  color: #e2e8f0;
+  font-size: .85rem;
+}
+label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #64748b; }
+#queue-list {
+  border-radius: 1rem;
+  border: 1px solid rgba(255,255,255,.05);
+  background: rgba(11,15,23,.6);
+  min-height: 300px;
+  overflow-y: auto;
+}
+#queue-list li { padding: 1rem 1.25rem; border-bottom: 1px solid rgba(255,255,255,.05); }
+.bar-bg { background: #111827; border-radius: 9999px; height: 6px; overflow: hidden; margin-top: .4rem; }
+.bar-fill { background: linear-gradient(90deg,#6366f1,#a78bfa); height: 100%; border-radius: 9999px; transition: width .25s; }
+.status-tag {
+  font-size: .65rem; text-transform: uppercase; letter-spacing: .06em;
+  padding: .2rem .5rem; border-radius: 9999px; background: #334155; color: #cbd5e1;
+}
+#error-msg {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.2);
+  color: #fca5a5; padding: .5rem .75rem; border-radius: .5rem; font-size: .85rem;
+}
+.hidden { display: none !important; }
+a.dl-btn { display: inline-block; padding: .4rem; border: 1px solid rgba(255,255,255,.1); border-radius: .5rem; color: #94a3b8; }
+a.dl-btn.active { color: #6ee7b7; border-color: rgba(110,231,183,.3); }
+.drop-active { border-color: #818cf8 !important; background: rgba(99,102,241,.08) !important; }

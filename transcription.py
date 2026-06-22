@@ -20,10 +20,18 @@ MODEL_CACHE_DIR.mkdir(exist_ok=True)
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 MODEL_IDLE_SECONDS = int(os.getenv("WHISPER_IDLE_SECONDS", "300"))
 
+# Files longer than this trigger chunked transcription (imported from processing)
+from processing import (
+    CHUNK_THRESHOLD_SECONDS,
+    CHUNK_DURATION_SECONDS,
+    get_audio_duration,
+    safe_unlink,
+    split_audio_into_chunks,
+)
+
 _model: WhisperModel | None = None
 _last_used: float = 0.0
-_model_lock = threading.RLock()  # RLock: same thread may re-acquire (e.g. touch_model inside locked methods)
-# Counts threads currently iterating segments; prevents unload during active use.
+_model_lock = threading.RLock()
 _active_transcriptions: int = 0
 
 
@@ -33,7 +41,6 @@ class TranscriptionError(Exception):
 
 # Devanagari Unicode block
 DEV_RE = re.compile(r"[\u0900-\u097F]")
-# Matches a run of Devanagari characters (for selective transliteration)
 _DEV_CHUNK_RE = re.compile(r"[\u0900-\u097F]+")
 
 # Whisper supported language codes (ISO 639-1 subset)
@@ -97,6 +104,10 @@ ENGLISH_MAPPING = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Language helpers
+# ---------------------------------------------------------------------------
+
 def validate_language(language: str | None) -> str | None:
     """Return the language code if valid for Whisper, else raise TranscriptionError."""
     if language is None:
@@ -112,12 +123,12 @@ def validate_language(language: str | None) -> str | None:
     return code
 
 
-def _transliterate_devanagari_only(text: str) -> str:
-    """Transliterate only Devanagari runs via ITRANS; Latin / numeric portions are kept intact.
+# ---------------------------------------------------------------------------
+# Hinglish romanisation
+# ---------------------------------------------------------------------------
 
-    This prevents the ITRANS converter from mangling English words that appear
-    alongside Hindi in mixed Hinglish transcripts.
-    """
+def _transliterate_devanagari_only(text: str) -> str:
+    """Transliterate only Devanagari runs via ITRANS; Latin/numeric portions stay intact."""
     parts: list[str] = []
     last = 0
     for m in _DEV_CHUNK_RE.finditer(text):
@@ -129,14 +140,25 @@ def _transliterate_devanagari_only(text: str) -> str:
 
 
 def to_natural_roman(text: str) -> str:
-    """Convert Devanagari-containing text to a natural Hinglish Roman spelling."""
+    """Convert Devanagari-containing text to a natural Hinglish Roman spelling.
+
+    Wraps the conversion so any unexpected exception returns the original text
+    rather than crashing the whole transcription — important for very long files
+    where one bad segment should not abort everything.
+    """
     if not text:
         return text
+    try:
+        return _to_natural_roman_impl(text)
+    except Exception as exc:
+        logger.warning("Romanisation failed for segment (returning original): %s", exc)
+        return text
 
-    # Transliterate only the Devanagari portions (Latin words stay untouched)
+
+def _to_natural_roman_impl(text: str) -> str:
     itrans_text = _transliterate_devanagari_only(text)
 
-    # Clean ITRANS nasalization markers before tokenizing
+    # Clean ITRANS nasalisation markers
     itrans_text = itrans_text.replace(".N", "n")
     itrans_text = itrans_text.replace(".n", "n")
     itrans_text = itrans_text.replace("~N", "n")
@@ -157,10 +179,8 @@ def to_natural_roman(text: str) -> str:
         if word.endswith("a") and len(word) > 2:
             word = word[:-1]
 
-        # Middle schwa deletion: e.g. "karate" → "karte"
         word = re.sub(r"([b-df-hj-np-tv-z])a([tT][eA])", r"\1\2", word)
 
-        # Map ITRANS uppercase vowels to natural equivalents
         if word.startswith("A"):
             word = "aa" + word[1:]
         else:
@@ -171,7 +191,6 @@ def to_natural_roman(text: str) -> str:
         word = word.replace("T", "t")
         word = word.replace("D", "d")
         word = word.replace("N", "n")
-
         word = word.lower()
 
         if word.startswith("v"):
@@ -182,7 +201,6 @@ def to_natural_roman(text: str) -> str:
             elif word == "vaha":
                 word = "woh"
 
-        # Common pronoun / filler word normalisations
         if word in ("ham", "hama"):
             word = "hum"
         elif word in ("men", "me"):
@@ -232,7 +250,7 @@ def unload_model() -> bool:
 
 
 def maybe_unload_model(idle_seconds: float | None = None) -> bool:
-    """Unload the model if it has been idle and no transcription is active."""
+    """Unload the model if it has been idle long enough and no transcription is active."""
     global _active_transcriptions
     with _model_lock:
         if _model is None:
@@ -270,7 +288,6 @@ def _load_model() -> WhisperModel:
 
 
 def _acquire_model() -> WhisperModel:
-    """Load model and increment the active-transcription counter atomically."""
     global _active_transcriptions
     with _model_lock:
         model = _load_model()
@@ -279,7 +296,6 @@ def _acquire_model() -> WhisperModel:
 
 
 def _release_model() -> None:
-    """Decrement the active-transcription counter."""
     global _active_transcriptions
     with _model_lock:
         _active_transcriptions = max(0, _active_transcriptions - 1)
@@ -292,19 +308,24 @@ def _release_model() -> None:
 
 def _progress_payload(
     file_name: str,
-    segment_end: float,
-    duration: float,
+    elapsed_seconds: float,
+    total_seconds: float,
     live_text: str,
     live_text_hinglish: str | None = None,
     file_index: int = 0,
     file_count: int = 1,
 ) -> dict:
-    if duration > 0:
-        file_pct = min(100, int((segment_end / duration) * 100))
+    """Build a progress payload.
+
+    *elapsed_seconds* and *total_seconds* are relative to the FULL file duration
+    (not just the current chunk), so progress stays monotonically increasing.
+    """
+    if total_seconds > 0:
+        file_pct = min(100, int((elapsed_seconds / total_seconds) * 100))
     else:
         file_pct = 0
     if file_count > 1:
-        overall = int(((file_index + (file_pct / 100)) / file_count) * 100)
+        overall = int(((file_index + file_pct / 100) / file_count) * 100)
     else:
         overall = file_pct
     return {
@@ -316,21 +337,24 @@ def _progress_payload(
 
 
 # ---------------------------------------------------------------------------
-# Core transcription
+# Single-chunk transcription
 # ---------------------------------------------------------------------------
 
-def _iter_segments(
+def _transcribe_chunk(
     wav_path: str,
     file_name: str,
-    on_event: Callable[[dict], None] | None = None,
-    file_index: int = 0,
-    file_count: int = 1,
-    language: str | None = None,
-) -> tuple[list[str], list[str], float]:
-    """Run Whisper on *wav_path* and return (paragraphs, originals, duration).
+    language: str | None,
+    on_event: Callable[[dict], None] | None,
+    # Offset of this chunk within the full file (for progress calculation)
+    chunk_offset_seconds: float,
+    total_file_seconds: float,
+    file_index: int,
+    file_count: int,
+) -> tuple[list[str], list[str]]:
+    """Transcribe one WAV chunk and return (paragraphs, originals).
 
-    The model reference-count is held for the full duration of segment iteration
-    so the maintenance loop cannot unload the model mid-transcription.
+    Progress events are emitted with timestamps relative to the full file so the
+    progress bar advances smoothly across all chunks.
     """
     model = _acquire_model()
     try:
@@ -340,38 +364,50 @@ def _iter_segments(
             vad_filter=True,
             language=language,
         )
-        duration = float(info.duration or 0)
+        chunk_duration = float(info.duration or 0)
         paragraphs: list[str] = []
         original_paragraphs: list[str] = []
 
-        logger.debug("Transcribing '%s' (%.1f s, lang=%s).", file_name, duration, language or "auto")
+        logger.debug(
+            "Transcribing chunk (offset=%.0f s, dur=%.0f s, lang=%s).",
+            chunk_offset_seconds, chunk_duration, language or "auto",
+        )
 
         for segment in segments:
             text = segment.text.strip()
-            if text:
-                original_paragraphs.append(text)
-                hinglish_text: str | None = None
-                if DEV_RE.search(text):
-                    hinglish_text = to_natural_roman(text)
-                    text = hinglish_text
-                paragraphs.append(text)
-                if on_event:
-                    on_event(
-                        _progress_payload(
-                            file_name=file_name,
-                            segment_end=float(segment.end),
-                            duration=duration,
-                            live_text=original_paragraphs[-1],
-                            live_text_hinglish=hinglish_text,
-                            file_index=file_index,
-                            file_count=file_count,
-                        )
+            if not text:
+                continue
+
+            original_paragraphs.append(text)
+            hinglish_text: str | None = None
+            if DEV_RE.search(text):
+                hinglish_text = to_natural_roman(text)
+                text = hinglish_text
+            paragraphs.append(text)
+
+            if on_event:
+                # segment.end is relative to this chunk; add offset for full-file progress
+                full_elapsed = chunk_offset_seconds + float(segment.end)
+                on_event(
+                    _progress_payload(
+                        file_name=file_name,
+                        elapsed_seconds=full_elapsed,
+                        total_seconds=total_file_seconds,
+                        live_text=original_paragraphs[-1],
+                        live_text_hinglish=hinglish_text,
+                        file_index=file_index,
+                        file_count=file_count,
                     )
+                )
     finally:
         _release_model()
 
-    return paragraphs, original_paragraphs, duration
+    return paragraphs, original_paragraphs
 
+
+# ---------------------------------------------------------------------------
+# Public transcription entry point
+# ---------------------------------------------------------------------------
 
 def transcribe_audio(
     wav_path: str,
@@ -382,6 +418,15 @@ def transcribe_audio(
     file_count: int = 1,
     language: str | None = None,
 ) -> str:
+    """Transcribe *wav_path* to a text file at *output_txt_path*.
+
+    For files longer than CHUNK_THRESHOLD_SECONDS the audio is automatically
+    split into CHUNK_DURATION_SECONDS segments before transcription.  Each chunk
+    is processed independently and deleted immediately after use, keeping peak
+    memory consumption constant regardless of video length.
+
+    Returns the path to the written transcript file.
+    """
     wav = Path(wav_path).expanduser().resolve()
     if not wav.is_file():
         raise TranscriptionError(f"Audio file not found: {wav_path}")
@@ -390,28 +435,79 @@ def transcribe_audio(
     out.parent.mkdir(parents=True, exist_ok=True)
     label = file_name or wav.name
 
-    # Validate language code before hitting Whisper
     language = validate_language(language)
 
-    try:
-        paragraphs, original_paragraphs, duration = _iter_segments(
-            str(wav),
-            label,
-            on_event=on_event,
-            file_index=file_index,
-            file_count=file_count,
-            language=language,
-        )
-    except TranscriptionError:
-        raise
-    except Exception as exc:
-        raise TranscriptionError(f"Transcription failed: {exc}") from exc
+    total_duration = get_audio_duration(str(wav))
+    if total_duration <= 0:
+        # Fallback: let Whisper figure it out from the first chunk
+        total_duration = 1.0
 
-    if not paragraphs:
+    # ── Decide: single pass or chunked ────────────────────────────────────────
+    if total_duration <= CHUNK_THRESHOLD_SECONDS:
+        chunks = [str(wav)]
+        owns_chunks = False      # do NOT delete the original
+        logger.info("Transcribing '%s' in a single pass (%.1f min).", label, total_duration / 60)
+    else:
+        logger.info(
+            "File '%s' is %.1f min — splitting into %d-min chunks for memory safety.",
+            label, total_duration / 60, CHUNK_DURATION_SECONDS // 60,
+        )
+        try:
+            chunks = split_audio_into_chunks(str(wav), CHUNK_DURATION_SECONDS)
+        except Exception as exc:
+            raise TranscriptionError(f"Failed to split audio for chunked processing: {exc}") from exc
+        owns_chunks = True       # we created these temp files; delete after use
+
+    # ── Process chunks ─────────────────────────────────────────────────────────
+    all_paragraphs: list[str] = []
+    chunk_offset = 0.0
+
+    for chunk_idx, chunk_path in enumerate(chunks):
+        chunk_label = (
+            f"{label} [part {chunk_idx + 1}/{len(chunks)}]"
+            if len(chunks) > 1
+            else label
+        )
+        logger.info("Processing %s …", chunk_label)
+
+        try:
+            paras, _originals = _transcribe_chunk(
+                chunk_path,
+                label,                # always use original name for UI matching
+                language=language,
+                on_event=on_event,
+                chunk_offset_seconds=chunk_offset,
+                total_file_seconds=total_duration,
+                file_index=file_index,
+                file_count=file_count,
+            )
+        except Exception as exc:
+            # Clean up remaining chunks before re-raising
+            if owns_chunks:
+                for remaining in chunks[chunk_idx:]:
+                    safe_unlink(remaining)
+            raise TranscriptionError(
+                f"Transcription failed at chunk {chunk_idx + 1}/{len(chunks)} "
+                f"(~{int(chunk_offset // 60)} min into file): {exc}"
+            ) from exc
+        finally:
+            # Delete this chunk immediately to free disk and memory pressure
+            if owns_chunks:
+                safe_unlink(chunk_path)
+            # Force GC between chunks to return memory to OS
+            gc.collect()
+
+        all_paragraphs.extend(paras)
+        chunk_offset += CHUNK_DURATION_SECONDS
+
+    if not all_paragraphs:
         raise TranscriptionError("No speech detected in the audio.")
 
-    out.write_text("\n\n".join(paragraphs) + "\n", encoding="utf-8")
-    logger.info("Transcript written to '%s' (%d paragraph(s)).", out, len(paragraphs))
+    out.write_text("\n\n".join(all_paragraphs) + "\n", encoding="utf-8")
+    logger.info(
+        "Transcript written to '%s' (%d paragraph(s), %.1f min).",
+        out, len(all_paragraphs), total_duration / 60,
+    )
     return str(out)
 
 

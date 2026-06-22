@@ -11,3 +11,4 @@ outputs/*
 models/
 *.wav
 *.txt
+.offscript.pid

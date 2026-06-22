@@ -33,23 +33,28 @@ ensure_venv() {
   local py
   py="$(pick_python)"
 
-  # Re-create if moved (VIRTUAL_ENV path in activate won't match)
-  if [[ -d ".venv" ]]; then
-    local expected="VIRTUAL_ENV=\"${ROOT}/.venv\""
-    if ! grep -qF "$expected" ".venv/bin/activate" 2>/dev/null; then
-      warn "venv path mismatch — re-creating..."
+  # Validate existing venv by asking its Python binary for sys.prefix.
+  # This is reliable across all Python versions and venv formats (including
+  # Python 3.14's cygpath-style activate scripts on Linux).
+  if [[ -x ".venv/bin/python" ]]; then
+    local prefix
+    prefix="$(".venv/bin/python" -c "import sys; print(sys.prefix)" 2>/dev/null || true)"
+    if [[ "$prefix" == "${ROOT}/.venv" ]]; then
+      # shellcheck source=/dev/null
+      source ".venv/bin/activate"
+      ok "Using existing virtual environment."
+      return 0
+    else
+      warn "venv is stale (prefix='${prefix}') — re-creating..."
       rm -rf .venv
     fi
   fi
 
-  if [[ ! -d ".venv" ]]; then
-    log "Creating virtual environment..."
-    "$py" -m venv .venv
-  fi
-
+  log "Creating virtual environment..."
+  "$py" -m venv .venv
   # shellcheck source=/dev/null
   source ".venv/bin/activate"
-  ok "Virtual environment ready."
+  ok "Virtual environment created."
 }
 
 # ── 3. Dependencies (cached: only reinstall when requirements.txt changes) ────
@@ -124,14 +129,37 @@ check_ffmpeg() {
   fi
 }
 
-# ── 7. Stop a previous instance on the same port ──────────────────────────────
+# ── 7. Stop a previous instance using a PID file ──────────────────────────────
+# A PID file is the only reliable way to find our previous process regardless
+# of how it was started (nohup, direct, etc.) or what pkill pattern it matches.
+PID_FILE="${ROOT}/.offscript.pid"
+
 stop_existing_server() {
-  # Only kill our own venv's uvicorn process — never use fuser (too aggressive)
-  local pattern="${ROOT}/.venv/bin/python.*uvicorn.*main:app"
-  if pgrep -f "$pattern" >/dev/null 2>&1; then
-    log "Stopping previous OffScript instance..."
-    pkill -f "$pattern" 2>/dev/null || true
-    sleep 1
+  if [[ -f "$PID_FILE" ]]; then
+    local old_pid
+    old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      log "Stopping previous OffScript instance (PID $old_pid)..."
+      kill "$old_pid" 2>/dev/null || true
+      # Wait up to 5 s for it to exit
+      local i
+      for i in $(seq 1 10); do
+        kill -0 "$old_pid" 2>/dev/null || break
+        sleep 0.5
+      done
+      # Force-kill if still alive
+      kill -9 "$old_pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+
+  # Fallback: kill anything else that grabbed our port
+  local port_pid
+  port_pid="$(ss -tlnp 2>/dev/null | awk -v p=":${PORT} " '$0 ~ p {match($0,/pid=([0-9]+)/,a); print a[1]}')"
+  if [[ -n "$port_pid" && "$port_pid" != "0" ]]; then
+    log "Port ${PORT} still held by PID ${port_pid} — killing..."
+    kill "$port_pid" 2>/dev/null || true
+    sleep 0.5
   fi
 }
 
@@ -184,6 +212,7 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
+  rm -f "$PID_FILE"
   log "Goodbye."
 }
 trap cleanup EXIT INT TERM
@@ -202,6 +231,7 @@ log "Starting server at $URL ..."
 # Note: --reload is intentionally omitted — it double-loads the Whisper model.
 python -m uvicorn main:app --host "$HOST" --port "$PORT" 2>&1 &
 SERVER_PID=$!
+echo "$SERVER_PID" > "$PID_FILE"   # record PID so next run can stop us cleanly
 
 if wait_for_server; then
   open_browser "$URL"

@@ -11,6 +11,11 @@ BASE_DIR = Path(__file__).parent
 TEMP_AUDIO_DIR = BASE_DIR / "temp_audio"
 TEMP_AUDIO_DIR.mkdir(exist_ok=True)
 
+# Files longer than this (seconds) are split before transcription to avoid OOM.
+# 45 min is a safe upper limit for ~5 GB RAM machines with the Whisper base model.
+CHUNK_THRESHOLD_SECONDS: int = 45 * 60   # 45 minutes
+CHUNK_DURATION_SECONDS:  int = 30 * 60   # each chunk is 30 minutes
+
 # Supported media file extensions (checked on upload to give early feedback)
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset({
     # Video
@@ -78,6 +83,15 @@ def _has_audio_stream(probe: dict) -> bool:
     )
 
 
+def get_audio_duration(wav_path: str) -> float:
+    """Return the duration of a WAV file in seconds (0.0 on failure)."""
+    try:
+        info = ffmpeg.probe(wav_path)
+        return float(info.get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        return 0.0
+
+
 # FFmpeg stderr substrings that indicate a corrupt / unreadable input
 _CORRUPTION_TOKENS = (
     "invalid data",
@@ -96,6 +110,7 @@ def extract_audio(video_path: str) -> str:
     """Extract a mono 16 kHz PCM WAV from any video/audio file with an audio track.
 
     Raises AudioExtractionError for all failure modes with a human-readable message.
+    Returns the path to the extracted WAV file.
     """
     src = Path(video_path).expanduser().resolve()
 
@@ -150,5 +165,77 @@ def extract_audio(video_path: str) -> str:
             "The video may have a corrupt audio track."
         )
 
-    logger.info("Audio extracted: '%s' (%.1f KB)", out.name, out.stat().st_size / 1024)
+    size_kb = out.stat().st_size / 1024
+    duration = get_audio_duration(str(out))
+    logger.info(
+        "Audio extracted: '%s' (%.1f KB, %.1f min)",
+        out.name, size_kb, duration / 60,
+    )
     return str(out)
+
+
+def split_audio_into_chunks(
+    wav_path: str,
+    chunk_duration: int = CHUNK_DURATION_SECONDS,
+) -> list[str]:
+    """Split a WAV file into sequential fixed-duration chunks using FFmpeg.
+
+    Each chunk is a new temp WAV file.  The original file is NOT deleted here —
+    the caller owns that lifecycle.  Returns a list of chunk paths in order.
+
+    If the file is shorter than *chunk_duration*, returns ``[wav_path]`` (no split).
+    """
+    total_duration = get_audio_duration(wav_path)
+    if total_duration <= 0:
+        logger.warning("Could not determine duration of '%s' — will not split.", wav_path)
+        return [wav_path]
+
+    if total_duration <= chunk_duration:
+        return [wav_path]
+
+    n_chunks = int(total_duration / chunk_duration) + (1 if total_duration % chunk_duration else 0)
+    logger.info(
+        "Long audio detected (%.1f min) — splitting into %d × %d-min chunks.",
+        total_duration / 60, n_chunks, chunk_duration // 60,
+    )
+
+    stem = Path(wav_path).stem
+    chunks: list[str] = []
+
+    for i in range(n_chunks):
+        start = i * chunk_duration
+        # Last chunk: let ffmpeg figure out the remaining length naturally
+        out = TEMP_AUDIO_DIR / f"{stem}_chunk{i:03d}_{uuid.uuid4().hex[:6]}.wav"
+        try:
+            (
+                ffmpeg
+                .input(wav_path, ss=start, t=chunk_duration)
+                .output(
+                    str(out),
+                    acodec="pcm_s16le",
+                    ac=1,
+                    ar=16000,
+                )
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+        except ffmpeg.Error as e:
+            # Clean up any chunks already created and propagate
+            for c in chunks:
+                safe_unlink(c)
+            raise AudioExtractionError(
+                f"Failed to split audio at chunk {i}: {_decode_ffmpeg_error(e)}"
+            ) from e
+
+        if not out.is_file() or out.stat().st_size == 0:
+            for c in chunks:
+                safe_unlink(c)
+            raise AudioExtractionError(f"Chunk {i} was empty after split.")
+
+        chunks.append(str(out))
+        logger.debug(
+            "  Chunk %d/%d: start=%.0f s, file=%s (%.1f KB)",
+            i + 1, n_chunks, start, out.name, out.stat().st_size / 1024,
+        )
+
+    return chunks

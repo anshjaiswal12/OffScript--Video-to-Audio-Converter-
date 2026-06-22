@@ -6,37 +6,33 @@
   <title>OffScript</title>
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <!--
-    Tailwind is served from a locally cached copy (static/tailwind-cdn.js).
-    Run start.sh once with internet to download it; all subsequent runs are fully offline.
-    If the file is missing a plain fallback stylesheet is used below.
+    Tailwind Play CDN v3 — served from a locally cached file (static/tailwind-cdn.js).
+    IMPORTANT: tailwind.config must be assigned AFTER the CDN script executes because
+    the CDN runtime sets up window.tailwind on load; pre-setting it gets overwritten.
+    If the file is missing the onerror handler loads a minimal fallback stylesheet.
   -->
+  <script src="/static/tailwind-cdn.js" onerror="
+    (function(){
+      var l=document.createElement('link');
+      l.rel='stylesheet';
+      l.href='/static/fallback.css';
+      document.head.appendChild(l);
+    })()
+  "></script>
   <script>
-    (function () {
-      var s = document.createElement("script");
-      s.src = "/static/tailwind-cdn.js";
-      s.onerror = function () {
-        // Tailwind not cached yet — apply minimal fallback styles so the page is usable
-        var link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = "/static/fallback.css";
-        document.head.appendChild(link);
-      };
-      document.head.appendChild(s);
-    })();
-  </script>
-  <script>
-    // Tailwind Play CDN reads window.tailwind.config before it initialises.
-    // Define it unconditionally so it is ready whenever the CDN script loads.
-    window.tailwind = window.tailwind || {};
-    window.tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            surface: { 950: "#07090f", 900: "#0b0f17", 800: "#111827", 700: "#1a2233" },
+    /* Set custom palette immediately after CDN initialises.
+       Guard against tailwind being undefined (e.g. if CDN file is still being cached). */
+    if (typeof tailwind !== "undefined") {
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              surface: { 950: "#07090f", 900: "#0b0f17", 800: "#111827", 700: "#1a2233" },
+            },
           },
         },
-      },
-    };
+      };
+    }
   </script>
   <style>
     .drop-active { border-color: #818cf8 !important; background: rgba(99,102,241,.08) !important; }
